@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <title>motion color & sound (Lightsaber)</title>
+  </head>
+  <body>
+    <div id="canvas">
+      <button id="start" onClick="doStart()">start</button>
+      <button id="stop" onClick="doStop()">stop</button>
+      <div id="info">
+        <center>
+          <mark>Lightsaber version</mark><br />
+          <big>Unmute and enjoy the sound !</big>
+        </center>
+      </div>
+    </div>
+  </body>
+  <script>
+    const $ = document.querySelector.bind(document);
+    const canvas = $('#canvas');
+    const start = $('#start');
+    const stop = $('#stop');
+    const audioCtx = new AudioContext();
+    const audio = { o: null, g: null, w: null, e: null };
+    const audioInit = () => {
+      const distortion = (k) => {
+        const smpls = 44100;
+        const curve = new Float32Array(smpls);
+        let x = 0;
+        for (let i = 0; i < smpls; ++i) {
+          x = (i * 2) / smpls - 1;
+          curve[i] = (x * 20 * (3 + k) * (Math.PI / 180)) / (Math.PI + k * Math.abs(x));
+        }
+        return curve;
+      };
+      audio.o = audioCtx.createOscillator();
+      audio.g = audioCtx.createGain();
+      audio.w = audioCtx.createWaveShaper();
+      audio.o.connect(audio.g);
+      audio.g.connect(audio.w);
+      audio.w.connect(audioCtx.destination);
+      audio.o.frequency.setValueAtTime(10, audioCtx.currentTime);
+      audio.g.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      audio.w.curve = distortion(500);
+      audio.w.oversample = '4x';
+      audio.o.start();
+      audio.e = new Audio('./blitz-2.mp3');
+    };
+    let lastExpression = { lat: 0, lng: 0, color: 'white', sound: { freq: 10, gain: 0.1 } };
+    const changeColor = (c, r, d) => {
+      canvas.style.backgroundImage = r
+        ? `radial-gradient(${lastExpression.color},${c})`
+        : `linear-gradient(${d}deg,${lastExpression.color},${c})`;
+    };
+    const changeSound = (s) => {
+      audio.o.frequency.exponentialRampToValueAtTime(s.freq, audioCtx.currentTime + 0.5);
+      audio.g.gain.exponentialRampToValueAtTime(s.gain, audioCtx.currentTime + 1.0);
+    };
+    const handle = (acc) => {
+      const len = (v) =>
+        Math.sqrt(
+          Object.values(v)
+            .map((x) => x ** 2)
+            .reduce((a, c) => a + c, 0),
+        );
+      const express = (v) => {
+        const lat = 180 * (Math.atan(v.z / len({ x: v.x, y: v.y })) / Math.PI);
+        const lng = 180 * (Math.atan(v.x / v.y) / Math.PI);
+        const latDiff = Math.abs(lat - lastExpression.lat);
+        const lngDiff = Math.abs(lng - lastExpression.lng);
+
+        if (latDiff <= 45 && lngDiff <= 45) return;
+
+        const color = ((vec) => {
+          const n = (value, threshold) => Math.ceil(Math.abs((value / threshold) * 255));
+          return `rgb(${n(vec.x, 5)},${n(vec.y, 5)},${n(vec.z, 5)})`;
+        })(v);
+        changeColor(color, latDiff > lngDiff, Math.ceil(lng));
+
+        const sound = ((vec) => {
+          const n = (value, scale) => Math.abs(value * scale);
+          return { freq: 10 + n(vec.x, 2), gain: n(vec.y, 0.03) };
+        })(v);
+        changeSound(sound);
+
+        $('#info').innerHTML = `<pre>
+motion: ${JSON.stringify(acc, null, 2)}
+lastData: ${JSON.stringify(lastExpression, null, 2)}
+color: <small>${canvas.style.backgroundImage}</small>
+sound: ${JSON.stringify(sound, null, 2)}
+</pre>`;
+
+        lastExpression = { lat, lng, color, sound };
+      };
+
+      const swing = len(acc);
+      if (swing > 5.0) express(acc);
+      if (swing > 40.0) audio.e.play();
+    };
+    const motionHandler = (ev) => {
+      const acc = ev.acceleration || ev.accelerationIncludingGravity;
+      if (!acc) {
+        alert('動きを検出できませんでした');
+        return;
+      }
+      handle(acc);
+    };
+    const doStart = () => {
+      if (DeviceMotionEvent.requestPermission) {
+        DeviceMotionEvent.requestPermission()
+          .then((permissionState) => {
+            if (permissionState === 'granted') {
+              window.addEventListener('devicemotion', motionHandler);
+            }
+          })
+          .catch(console.error);
+      } else {
+        alert('このブラウザでは動きを検出できません');
+        return false;
+      }
+      audioInit();
+      stop.style.display = 'block';
+      start.style.display = 'none';
+    };
+    const doStop = () => {
+      window.removeEventListener('devicemotion', motionHandler);
+      audio.o.stop();
+      stop.style.display = 'none';
+      start.style.display = 'block';
+    };
+  </script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+    }
+    #canvas {
+      position: fixed;
+      top: 0;
+      width: 100vw;
+      height: 100vh;
+      background-repeat: no-repeat;
+      background-size: cover;
+    }
+    button {
+      display: block;
+      font-size: 15vmin;
+      margin: 0.5em auto;
+    }
+    #stop {
+      display: none;
+    }
+    #info {
+      position: fixed;
+      bottom: 0;
+      width: 100vw;
+      height: 45vh;
+      padding: 1em 5vw;
+      overflow: scroll;
+      font-size: 2.5vw;
+      color: black;
+      text-shadow: 0 0 2px white;
+      background: transparent;
+    }
+    #info > * {
+      width: 90vw;
+    }
+    #info big {
+      font-size: 200%;
+    }
+  </style>
+</html>
